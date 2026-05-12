@@ -3,41 +3,28 @@ import pandas as pd
 from openpyxl import load_workbook
 from io import BytesIO
 
-st.set_page_config(page_title="Amazon Precision Filler v2", layout="wide")
+st.set_page_config(page_title="Amazon Bulk Tool v3", layout="wide")
 
-st.title("🚀 Amazon Template Automator - Full Mapping")
-st.info("Estructura confirmada: Atributos en Fila 4 | Datos en Fila 7")
+st.title("🚀 Amazon Template Automator - Corrección EAN y Bullets")
 
-# --- 1. VALORES FIJOS (Se mantienen automáticos) ---
+# --- 1. VALORES FIJOS (Campos que Amazon necesita tal cual) ---
 VALORES_FIJOS = {
-    "brand#1.value": "Cecotec", "external_product_id#1.type": "EAN", 
-    "package_level#1.value": "Unit", "is_trade_item_orderable_unit#1.value": "No",
-    "manufacturer#1.value": "Cecotec", "number_of_items#1.value": 1,
-    "is_oem_authorized#1.value": "Yes", "wattage#1.unit": "Watts",
-    "item_depth_width_height#1.depth.unit": "Centimeters",
-    "item_depth_width_height#1.height.unit": "Centimeters",
-    "item_depth_width_height#1.width.unit": "Centimeters",
-    "item_dimensions#1.length.unit": "Centimeters",
-    "item_dimensions#1.width.unit": "Centimeters",
-    "item_dimensions#1.height.unit": "Centimeters",
-    "item_package_dimensions#1.length.unit": "Centimeters",
-    "item_package_dimensions#1.width.unit": "Centimeters",
-    "item_package_dimensions#1.height.unit": "Centimeters",
-    "item_package_weight#1.unit": "Kilograms", "rtip_items_per_inner_pack#1.value": 1,
-    "country_of_origin#1.value": "Spain", "warranty_description#1.value": "2 ans du garantie",
-    "supplier_declared_dg_hz_regulation#1.value": "Not Applicable",
-    "item_weight#1.unit": "Kilograms", "eu_spare_part_availability_duration#1.value": 10,
-    "eu_spare_part_availability_duration#1.unit": "Years",
-    "dsa_responsible_party_address#1.value": "https://cecotec.es/",
-    "compliance_media#1.content_type": "User Manual",
-    "compliance_media#1.content_language": "fr_FR", "gpsr_safety_attestation#1.value": "Yes",
-    "gpsr_manufacturer_reference#1.gpsr_manufacturer_email_address": "https://cecotec.es/"
+    "external_product_id#1.type": "EAN",  # Esto indica que lo que sigue es un EAN
+    "brand#1.value": "Cecotec",
+    "package_level#1.value": "Unit",
+    "is_trade_item_orderable_unit#1.value": "No",
+    "manufacturer#1.value": "Cecotec",
+    "country_of_origin#1.value": "Spain",
+    "item_weight#1.unit": "Kilograms",
+    "item_package_weight#1.unit": "Kilograms",
+    "wattage#1.unit": "Watts"
 }
 
-# --- 2. MAPEO VARIABLE COMPLETO (Aparecerán en la barra lateral) ---
+# --- 2. MAPEO VARIABLE (Lo que sacamos de tu PIM) ---
+# He ajustado "external_product_id#1.value" para que tome el número del PIM
 MAPEO_INICIAL = {
     "vendor_sku#1.value": "SKU",
-    "external_product_id#1.value": "EAN",
+    "external_product_id#1.value": "EAN",  # <--- AQUÍ VA EL NÚMERO (Columna C de tu PIM)
     "merchant_suggested_asin#1.value": "ASIN",
     "model_number#1.value": "Nombre Producto / Modelo",
     "bullet_point#1.value": "Bulletpoint 1 (FR)",
@@ -45,49 +32,37 @@ MAPEO_INICIAL = {
     "bullet_point#3.value": "Bulletpoint 3 (FR)",
     "bullet_point#4.value": "Bulletpoint 4 (FR)",
     "bullet_point#5.value": "Bulletpoint 5 (FR)",
-    "item_type_name#1.value": "Subfamilia (FR)",
     "rtip_product_description#1.value": "Descripción larga del producto (FR)",
-    "color#1.value": "Color",
-    "part_number#1.value": "SKU",
-    "oem_equivalent_part_number#1.value": "SKU",
-    "wattage#1.value": "Potencia (W)",
-    "included_components#1.value": "Contenido de la caja",
-    "item_depth_width_height#1.depth.value": "Product depth (cm)",
-    "item_depth_width_height#1.height.value": "Product height (cm)",
-    "item_depth_width_height#1.width.value": "Product width (cm)",
-    "website_shipping_weight#1.value": "Peso Caja Color (kg)",
-    "item_dimensions#1.length.value": "Product depth (cm)",
-    "item_dimensions#1.width.value": "Product width (cm)",
-    "item_dimensions#1.height.value": "Product height (cm)",
     "item_package_dimensions#1.length.value": "Largo Caja Color cm",
     "item_package_dimensions#1.width.value": "Ancho Caja Color cm",
     "item_package_dimensions#1.height.value": "Alto Caja Color cm",
     "item_package_weight#1.value": "Peso Caja Color (kg)",
     "item_weight#1.value": "Product weight (Kg)",
-    "compliance_media#1.source_location": "Manual de instrucciones (Comercial)"
+    "wattage#1.value": "Potencia (W)"
 }
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL PARA AJUSTES ---
 st.sidebar.header("⚙️ Ajustes de Mapeo PIM")
 final_mapping = {}
-with st.sidebar.expander("📝 Revisar Correspondencias"):
+with st.sidebar.expander("📝 Verificar nombres de columnas PIM"):
     for amz, pim in MAPEO_INICIAL.items():
-        final_mapping[amz] = st.text_input(f"AMZ: {amz}", value=pim, key=f"f_{amz}")
+        final_mapping[amz] = st.text_input(f"Amazon: {amz}", value=pim, key=f"map_{amz}")
 
-# --- CARGA ---
+# --- CARGA DE ARCHIVOS ---
 col1, col2 = st.columns(2)
 with col1:
-    pim_file = st.file_uploader("📂 1. Subir Datos PIM", type=["xlsx", "csv"])
+    pim_file = st.file_uploader("📂 1. Subir Datos PIM (Excel/CSV)", type=["xlsx", "csv"])
 with col2:
-    amz_template = st.file_uploader("📂 2. Subir Plantilla Amazon", type=["xlsx"])
+    amz_template = st.file_uploader("📂 2. Subir Plantilla Amazon (Excel)", type=["xlsx"])
 
-if st.button("🚀 Procesar Plantilla"):
+if st.button("🚀 Generar Fichero Corregido"):
     if pim_file and amz_template:
         try:
+            # Leer PIM
             df_pim = pd.read_excel(pim_file) if pim_file.name.endswith('.xlsx') else pd.read_csv(pim_file)
-            wb = load_workbook(amz_template)
             
-            # Buscar la pestaña correcta
+            # Cargar Plantilla
+            wb = load_workbook(amz_template)
             ws = None
             for name in wb.sheetnames:
                 if "template" in name.lower():
@@ -95,30 +70,32 @@ if st.button("🚀 Procesar Plantilla"):
                     break
             if not ws: ws = wb.worksheets[1]
 
-            # Mapear Fila 4
+            # Detectar columnas en la Fila 4
             amazon_cols = {str(ws.cell(row=4, column=c).value).strip(): c 
                            for c in range(1, ws.max_column + 1) if ws.cell(row=4, column=c).value}
 
-            # ESCRITURA (Fila 7)
-            count = 0
+            # Procesar filas (desde la 7)
+            success_count = 0
             for i, row_pim in df_pim.iterrows():
                 row_idx = i + 7
                 
-                # Variables (Desde la barra lateral)
+                # 1. Rellenar datos del PIM
                 for amz_key, pim_col in final_mapping.items():
                     if amz_key in amazon_cols and pim_col in df_pim.columns:
                         ws.cell(row=row_idx, column=amazon_cols[amz_key]).value = row_pim[pim_col]
                 
-                # Fijos
+                # 2. Rellenar valores fijos (incluye el tipo "EAN")
                 for amz_key, val in VALORES_FIJOS.items():
                     if amz_key in amazon_cols:
                         ws.cell(row=row_idx, column=amazon_cols[amz_key]).value = val
-                count += 1
+                
+                success_count += 1
 
+            # Descarga
             output = BytesIO()
             wb.save(output)
-            st.success(f"✅ Se han rellenado {count} filas. ¡Revisa los Bulletpoints 3-5!")
-            st.download_button("📥 Descargar Resultado", output.getvalue(), "Amazon_Final_Completo.xlsx")
+            st.success(f"✅ Procesado: {success_count} productos. EAN y Bullets 3-5 incluidos.")
+            st.download_button("📥 Descargar Plantilla Amazon", output.getvalue(), "Amazon_Final_Correcto.xlsx")
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error técnico: {e}")
