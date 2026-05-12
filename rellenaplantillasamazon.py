@@ -1,89 +1,138 @@
 import streamlit as st
 import pandas as pd
+from openpyxl import load_workbook
 from io import BytesIO
 
-st.set_page_config(page_title="Amazon Filler Pro", layout="wide")
+st.set_page_config(page_title="Amazon Template Pro", layout="wide")
 
-st.title("📦 Amazon Template Automator")
+st.title("🛠️ Automatizador de Plantillas Amazon (Carga Masiva)")
 
-# --- CARGA DE ARCHIVOS ---
-with st.sidebar:
-    st.header("1. Configuración de Mapeo")
-    config_file = st.file_uploader("Subir Amazon-PIM.xlsx", type=["xlsx"])
+# --- 1. CONFIGURACIÓN INICIAL (MAPEOS) ---
+
+# Valores que siempre son iguales
+VALORES_FIJOS = {
+    "brand#1.value": "Cecotec",
+    "external_product_id#1.type": "EAN",
+    "package_level#1.value": "Unit",
+    "is_trade_item_orderable_unit#1.value": "No",
+    "manufacturer#1.value": "Cecotec",
+    "number_of_items#1.value": 1,
+    "is_oem_authorized#1.value": "Yes",
+    "wattage#1.unit": "Watts",
+    "item_depth_width_height#1.depth.unit": "Centimeters",
+    "item_depth_width_height#1.height.unit": "Centimeters",
+    "item_depth_width_height#1.width.unit": "Centimeters",
+    "item_dimensions#1.length.unit": "Centimeters",
+    "item_dimensions#1.width.unit": "Centimeters",
+    "item_dimensions#1.height.unit": "Centimeters",
+    "item_package_dimensions#1.length.unit": "Centimeters",
+    "item_package_dimensions#1.width.unit": "Centimeters",
+    "item_package_dimensions#1.height.unit": "Centimeters",
+    "item_package_weight#1.unit": "Kilograms",
+    "rtip_items_per_inner_pack#1.value": 1,
+    "country_of_origin#1.value": "Spain",
+    "warranty_description#1.value": "2 ans du garantie",
+    "supplier_declared_dg_hz_regulation#1.value": "Not Applicable",
+    "item_weight#1.unit": "Kilograms",
+    "eu_spare_part_availability_duration#1.value": 10,
+    "eu_spare_part_availability_duration#1.unit": "Years",
+    "dsa_responsible_party_address#1.value": "https://cecotec.es/",
+    "compliance_media#1.content_type": "User Manual",
+    "compliance_media#1.content_language": "fr_FR",
+    "gpsr_safety_attestation#1.value": "Yes",
+    "gpsr_manufacturer_reference#1.gpsr_manufacturer_email_address": "https://cecotec.es/"
+}
+
+# Mapeo Dinámico: { "Columna Amazon": "Columna PIM" }
+MAPEO_VARIABLES = {
+    "vendor_sku#1.value": "SKU",
+    "external_product_id#1.value": "EAN",
+    "merchant_suggested_asin#1.value": "ASIN",
+    "model_number#1.value": "Nombre Producto / Modelo",
+    "bullet_point#1.value": "Bulletpoint 1 (FR)",
+    "bullet_point#2.value": "Bulletpoint 2 (FR)",
+    "bullet_point#3.value": "Bulletpoint 3 (FR)",
+    "bullet_point#4.value": "Bulletpoint 4 (FR)",
+    "bullet_point#5.value": "Bulletpoint 5 (FR)",
+    "item_type_name#1.value": "Subfamilia (FR)",
+    "rtip_product_description#1.value": "Descripción larga del producto (FR)",
+    "color#1.value": "color",
+    "part_number#1.value": "SKU",
+    "oem_equivalent_part_number#1.value": "SKU",
+    "wattage#1.value": "Potencia (W)",
+    "included_components#1.value": "Contenido de la caja (FR)",
+    "item_depth_width_height#1.depth.value": "Product depth (cm)",
+    "item_depth_width_height#1.height.value": "Product height (cm)",
+    "item_depth_width_height#1.width.value": "Product width (cm)",
+    "website_shipping_weight#1.value": "Peso Caja Color (kg)",
+    "item_dimensions#1.length.value": "Product depth (cm)",
+    "item_dimensions#1.width.value": "Product width (cm)",
+    "item_dimensions#1.height.value": "Product height (cm)",
+    "item_package_dimensions#1.length.value": "Largo Caja Color cm",
+    "item_package_dimensions#1.width.value": "Ancho Caja Color cm",
+    "item_package_dimensions#1.height.value": "Alto Caja Color cm",
+    "item_package_weight#1.value": "Peso Caja Color (kg)",
+    "item_weight#1.value": "Product weight (Kg)",
+    "compliance_media#1.source_location": "Manual de instrucciones (Comercial)"
+}
+
+# --- 2. INTERFAZ ---
+
+st.sidebar.header("🔧 Ajustes de Mapeo")
+with st.sidebar.expander("Editar Mapeo PIM -> Amazon"):
+    edited_mapping = {}
+    for amz, pim in MAPEO_VARIABLES.items():
+        new_pim = st.text_input(f"Amazon: {amz}", value=pim)
+        edited_mapping[amz] = new_pim
 
 col1, col2 = st.columns(2)
 with col1:
-    st.header("2. Fichero PIM")
-    pim_file = st.file_uploader("Subir FRIGOS.xlsx", type=["xlsx", "csv"])
-
+    pim_file = st.file_uploader("📂 Subir Fichero PIM (FRIGOS.xlsx)", type=["xlsx"])
 with col2:
-    st.header("3. Plantilla Amazon")
-    amazon_template = st.file_uploader("Subir Plantilla Amazon (Refrigerators...)", type=["xlsx"])
+    amz_template = st.file_uploader("📂 Subir Plantilla Amazon Original", type=["xlsx"])
 
-if st.button("🚀 Iniciar Carga Masiva"):
-    if not (config_file and pim_file and amazon_template):
-        st.error("Faltan archivos por subir.")
-    else:
+if st.button("🚀 Procesar y Cumplimentar"):
+    if pim_file and amz_template:
         try:
-            # 1. LEER CONFIGURACIÓN (Mapeo y Fijos)
-            # Aseguramos nombres de columnas limpios
-            df_map = pd.read_excel(config_file, sheet_name=0)
-            df_fixed = pd.read_excel(config_file, sheet_name=1)
-
-            # 2. LEER PIM (FRIGOS)
-            df_pim = pd.read_excel(pim_file) if pim_file.name.endswith('.xlsx') else pd.read_csv(pim_file)
-
-            # 3. LEER PLANTILLA AMAZON (Pestaña 2: 'Template')
-            # Amazon usa la pestaña 2 para los datos. Habitualmente se llama 'Template'
-            xl = pd.ExcelFile(amazon_template)
-            nombre_pestana_destino = xl.sheet_names[1] # Forzamos la segunda pestaña
+            # Leer PIM
+            df_pim = pd.read_excel(pim_file)
             
-            # Guardamos las 3 filas de encabezado técnico
-            headers = pd.read_excel(amazon_template, sheet_name=nombre_pestana_destino, header=None, nrows=3)
-            # Obtenemos los nombres de las columnas técnicas (fila 3, índice 2)
-            amazon_cols = headers.iloc[2].tolist()
+            # Cargar Plantilla Amazon con openpyxl (mantiene formato)
+            wb = load_workbook(amz_template)
+            # La pestaña de carga suele ser la segunda (índice 1)
+            ws = wb.worksheets[1] 
+            
+            # Obtener las cabeceras técnicas de la fila 3 de la plantilla
+            amazon_headers = [cell.value for cell in ws[3]]
+            
+            # Diccionario para saber en qué columna (letra/índice) está cada campo de Amazon
+            col_idx = {header: i+1 for i, header in enumerate(amazon_headers) if header}
 
-            # 4. CREAR DATAFRAME DE TRABAJO
-            num_rows = len(df_pim)
-            # Creamos un DF vacío con las columnas exactas de Amazon
-            df_final = pd.DataFrame(columns=amazon_cols)
-
-            # 5. PROCESAR VALORES FIJOS (Hoja 2)
-            # Usamos iloc para evitar errores si los nombres de columna en el mapeo fallan
-            for _, row in df_fixed.iterrows():
-                campo_amazon = str(row.iloc[0]).strip()
-                valor_fijo = row.iloc[1]
-                if campo_amazon in df_final.columns:
-                    df_final[campo_amazon] = [valor_fijo] * num_rows
-
-            # 6. PROCESAR MAPEO (Hoja 1)
-            for _, row in df_map.iterrows():
-                col_amazon = str(row['AMAZON']).strip()
-                col_pim = str(row['PIM']).strip()
+            # --- PROCESO DE ESCRITURA ---
+            for i, row_pim in df_pim.iterrows():
+                excel_row = i + 4 # Empezamos en la fila 4 (debajo de cabeceras)
                 
-                if col_amazon in df_final.columns and col_pim in df_pim.columns:
-                    df_final[col_amazon] = df_pim[col_pim].values
+                # A. Escribir Valores Fijos
+                for amz_col, val in VALORES_FIJOS.items():
+                    if amz_col in col_idx:
+                        ws.cell(row=excel_row, column=col_idx[amz_col]).value = val
+                
+                # B. Escribir Valores Variables (PIM)
+                for amz_col, pim_col in edited_mapping.items():
+                    if amz_col in col_idx and pim_col in df_pim.columns:
+                        ws.cell(row=excel_row, column=col_idx[amz_col]).value = row_pim[pim_col]
 
-            # 7. RECONSTRUCCIÓN FINAL
-            # Convertimos los encabezados a DF para unirlos
-            df_headers = pd.DataFrame(headers.values, columns=amazon_cols)
-            # Concatenamos: Encabezados + Datos nuevos
-            df_completo = pd.concat([df_headers, df_final], ignore_index=True)
-
-            # 8. GENERAR EXCEL
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # Escribimos en la pestaña 'Template'
-                df_completo.to_excel(writer, index=False, header=False, sheet_name=nombre_pestana_destino)
+            # Guardar resultado
+            out_buf = BytesIO()
+            wb.save(out_buf)
             
-            st.success(f"✅ ¡Hecho! {num_rows} productos procesados.")
+            st.success(f"✅ Se han rellenado {len(df_pim)} filas en la plantilla original.")
             st.download_button(
-                label="⬇️ Descargar Fichero Final",
-                data=output.getvalue(),
-                file_name="Amazon_Carga_Final.xlsx",
+                label="📥 Descargar Plantilla Cumplimentada",
+                data=out_buf.getvalue(),
+                file_name="Amazon_Template_FULL.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
-            st.error(f"Error detallado: {e}")
-            st.info("Asegúrate de que en el archivo de mapeo las columnas se llamen 'AMAZON' y 'PIM'.")
+            st.error(f"Error: {e}")
