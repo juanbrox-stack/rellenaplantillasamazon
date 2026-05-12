@@ -3,13 +3,12 @@ import pandas as pd
 from openpyxl import load_workbook
 from io import BytesIO
 
-st.set_page_config(page_title="Amazon Bulk Tool", layout="wide")
+st.set_page_config(page_title="Amazon Pro Filler", layout="wide")
 
-st.title("🛠️ Automatizador de Plantillas Amazon")
-st.markdown("Carga cualquier plantilla de Amazon y tus datos de PIM para generar el fichero de carga masiva.")
+st.title("🚀 Amazon Template Automator")
 
-# --- CONFIGURACIÓN DE VALORES FIJOS (Por defecto) ---
-VALORES_FIJOS_DEFAULT = {
+# --- DICCIONARIOS POR DEFECTO ---
+VALORES_FIJOS = {
     "brand#1.value": "Cecotec", "external_product_id#1.type": "EAN", 
     "package_level#1.value": "Unit", "is_trade_item_orderable_unit#1.value": "No",
     "manufacturer#1.value": "Cecotec", "number_of_items#1.value": 1,
@@ -34,8 +33,7 @@ VALORES_FIJOS_DEFAULT = {
     "gpsr_manufacturer_reference#1.gpsr_manufacturer_email_address": "https://cecotec.es/"
 }
 
-# --- CONFIGURACIÓN DE MAPEO VARIABLE (Por defecto) ---
-MAPEO_VARIABLES_DEFAULT = {
+MAPEO_VARIABLES = {
     "vendor_sku#1.value": "SKU", "external_product_id#1.value": "EAN",
     "merchant_suggested_asin#1.value": "ASIN", "model_number#1.value": "Nombre Producto / Modelo",
     "bullet_point#1.value": "Bulletpoint 1 (FR)", "bullet_point#2.value": "Bulletpoint 2 (FR)",
@@ -60,70 +58,73 @@ MAPEO_VARIABLES_DEFAULT = {
     "compliance_media#1.source_location": "Manual de instrucciones (Comercial)"
 }
 
-# --- BARRA LATERAL: EDICIÓN DE MAPEO ---
-st.sidebar.header("⚙️ Configuración de Mapeo")
-st.sidebar.info("Modifica los nombres de las columnas del PIM si no coinciden con la categoría actual.")
+# --- INTERFAZ ---
+st.sidebar.header("⚙️ Configuración")
+with st.sidebar.expander("📝 Editar Mapeo PIM"):
+    final_mapping = {}
+    for amz, pim in MAPEO_VARIABLES.items():
+        res = st.text_input(f"AMZ: {amz}", value=pim)
+        final_mapping[amz] = res
 
-with st.sidebar.expander("📝 Editar Correspondencias"):
-    current_mapping = {}
-    for amz, pim_default in MAPEO_VARIABLES_DEFAULT.items():
-        val = st.text_input(f"Amazon: {amz}", value=pim_default, key=amz)
-        current_mapping[amz] = val
-
-# --- ÁREA DE CARGA ---
 col1, col2 = st.columns(2)
 with col1:
-    pim_file = st.file_uploader("📂 1. Subir Fichero Origen (PIM)", type=["xlsx", "csv"])
+    pim_file = st.file_uploader("📂 1. Subir Datos PIM", type=["xlsx", "csv"])
 with col2:
-    amz_template = st.file_uploader("📂 2. Subir Plantilla Destino (Amazon)", type=["xlsx"])
+    amz_template = st.file_uploader("📂 2. Subir Plantilla Amazon", type=["xlsx"])
 
-if st.button("🚀 Generar Fichero de Carga Masiva"):
+if st.button("🚀 Ejecutar y Rellenar"):
     if pim_file and amz_template:
         try:
             # Leer PIM
             df_pim = pd.read_excel(pim_file) if pim_file.name.endswith('.xlsx') else pd.read_csv(pim_file)
             
-            # Cargar Plantilla Amazon (Formato original)
+            # Cargar Plantilla original con openpyxl
             wb = load_workbook(amz_template)
-            # Buscamos la pestaña de datos (Template)
+            # Buscar la pestaña de carga (segunda o por nombre)
             sheet_name = "Template" if "Template" in wb.sheetnames else wb.sheetnames[1]
             ws = wb[sheet_name]
             
-            # Detectar Columnas en Fila 4 (Nombres técnicos)
-            amazon_cols = {str(cell.value).strip(): i+1 for i, cell in enumerate(ws[4]) if cell.value}
+            # --- DIAGNÓSTICO DE COLUMNAS ---
+            # Leemos la fila 4 para ver los nombres técnicos
+            amazon_cols = {}
+            raw_headers = []
+            for i, cell in enumerate(ws[4], 1):
+                if cell.value:
+                    header_name = str(cell.value).strip()
+                    amazon_cols[header_name] = i
+                    raw_headers.append(header_name)
             
-            if not amazon_cols:
-                st.error("No se han encontrado etiquetas técnicas en la fila 4 de la plantilla.")
-            else:
-                rows_added = 0
-                # Procesar cada fila del PIM
-                for i, row_pim in df_pim.iterrows():
-                    target_row = i + 7 # Datos empiezan en fila 7
-                    
-                    # Rellenar Variables mapeadas
-                    for amz_key, pim_col in current_mapping.items():
-                        if amz_key in amazon_cols and pim_col in df_pim.columns:
-                            ws.cell(row=target_row, column=amazon_cols[amz_key]).value = row_pim[pim_col]
-                    
-                    # Rellenar Valores Fijos
-                    for amz_key, fixed_val in VALORES_FIJOS_DEFAULT.items():
-                        if amz_key in amazon_cols:
-                            ws.cell(row=target_row, column=amazon_cols[amz_key]).value = fixed_val
-                    
-                    rows_added += 1
-
-                # Preparar descarga
-                output = BytesIO()
-                wb.save(output)
+            st.write("### 🔍 Diagnóstico de Plantilla")
+            st.write(f"Columnas técnicas encontradas en Fila 4: `{len(raw_headers)}`")
+            
+            # Verificar emparejamiento
+            missing = [k for k in final_mapping.keys() if k not in amazon_cols]
+            if missing:
+                with st.expander("⚠️ Columnas de Amazon NO encontradas en tu plantilla"):
+                    st.write(missing)
+            
+            # --- ESCRITURA ---
+            rows_filled = 0
+            for i, row_pim in df_pim.iterrows():
+                current_row = i + 7 # Amazon suele empezar datos en fila 7
                 
-                st.success(f"✅ ¡Completado! Se han rellenado {rows_added} filas.")
-                st.download_button(
-                    label="📥 Descargar Plantilla Cumplimentada",
-                    data=output.getvalue(),
-                    file_name="Carga_Masiva_Amazon_Final.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                # Escribir mapeo dinámico
+                for amz_key, pim_col in final_mapping.items():
+                    if amz_key in amazon_cols and pim_col in df_pim.columns:
+                        ws.cell(row=current_row, column=amazon_cols[amz_key]).value = row_pim[pim_col]
+                
+                # Escribir fijos
+                for amz_key, val in VALORES_FIJOS.items():
+                    if amz_key in amazon_cols:
+                        ws.cell(row=current_row, column=amazon_cols[amz_key]).value = val
+                
+                rows_filled += 1
+
+            # --- DESCARGA ---
+            output = BytesIO()
+            wb.save(output)
+            st.success(f"✅ Se han rellenado {rows_filled} filas.")
+            st.download_button("📥 Descargar Archivo Final", output.getvalue(), "Amazon_Relleno.xlsx")
+
         except Exception as e:
-            st.error(f"Se produjo un error: {e}")
-    else:
-        st.warning("Por favor, sube ambos archivos para procesar.")
+            st.error(f"Error técnico: {e}")
