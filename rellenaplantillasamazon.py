@@ -3,13 +3,13 @@ import pandas as pd
 from openpyxl import load_workbook
 from io import BytesIO
 
-st.set_page_config(page_title="Amazon Template Pro", layout="wide")
+st.set_page_config(page_title="Amazon Bulk Tool", layout="wide")
 
-st.title("📦 Amazon Template Automator")
-st.info("Configurado para leer nombres técnicos en Fila 4 y escribir datos desde Fila 7.")
+st.title("🛠️ Automatizador de Plantillas Amazon")
+st.markdown("Carga cualquier plantilla de Amazon y tus datos de PIM para generar el fichero de carga masiva.")
 
-# --- DICCIONARIOS (Tus datos) ---
-VALORES_FIJOS = {
+# --- CONFIGURACIÓN DE VALORES FIJOS (Por defecto) ---
+VALORES_FIJOS_DEFAULT = {
     "brand#1.value": "Cecotec", "external_product_id#1.type": "EAN", 
     "package_level#1.value": "Unit", "is_trade_item_orderable_unit#1.value": "No",
     "manufacturer#1.value": "Cecotec", "number_of_items#1.value": 1,
@@ -34,7 +34,8 @@ VALORES_FIJOS = {
     "gpsr_manufacturer_reference#1.gpsr_manufacturer_email_address": "https://cecotec.es/"
 }
 
-MAPEO_VARIABLES = {
+# --- CONFIGURACIÓN DE MAPEO VARIABLE (Por defecto) ---
+MAPEO_VARIABLES_DEFAULT = {
     "vendor_sku#1.value": "SKU", "external_product_id#1.value": "EAN",
     "merchant_suggested_asin#1.value": "ASIN", "model_number#1.value": "Nombre Producto / Modelo",
     "bullet_point#1.value": "Bulletpoint 1 (FR)", "bullet_point#2.value": "Bulletpoint 2 (FR)",
@@ -52,55 +53,77 @@ MAPEO_VARIABLES = {
     "item_dimensions#1.width.value": "Product width (cm)",
     "item_dimensions#1.height.value": "Product height (cm)",
     "item_package_dimensions#1.length.value": "Largo Caja Color cm",
-    "item_package_dimensions#1.width.unit": "Ancho Caja Color cm", # Corregido de .unit a .value si es dato
+    "item_package_dimensions#1.width.value": "Ancho Caja Color cm",
     "item_package_dimensions#1.height.value": "Alto Caja Color cm",
     "item_package_weight#1.value": "Peso Caja Color (kg)",
     "item_weight#1.value": "Product weight (Kg)",
     "compliance_media#1.source_location": "Manual de instrucciones (Comercial)"
 }
 
+# --- BARRA LATERAL: EDICIÓN DE MAPEO ---
+st.sidebar.header("⚙️ Configuración de Mapeo")
+st.sidebar.info("Modifica los nombres de las columnas del PIM si no coinciden con la categoría actual.")
+
+with st.sidebar.expander("📝 Editar Correspondencias"):
+    current_mapping = {}
+    for amz, pim_default in MAPEO_VARIABLES_DEFAULT.items():
+        val = st.text_input(f"Amazon: {amz}", value=pim_default, key=amz)
+        current_mapping[amz] = val
+
+# --- ÁREA DE CARGA ---
 col1, col2 = st.columns(2)
 with col1:
-    pim_file = st.file_uploader("📂 Subir PIM (FRIGOS)", type=["xlsx"])
+    pim_file = st.file_uploader("📂 1. Subir Fichero Origen (PIM)", type=["xlsx", "csv"])
 with col2:
-    amz_template = st.file_uploader("📂 Subir Plantilla Amazon", type=["xlsx"])
+    amz_template = st.file_uploader("📂 2. Subir Plantilla Destino (Amazon)", type=["xlsx"])
 
-if st.button("🚀 Ejecutar"):
+if st.button("🚀 Generar Fichero de Carga Masiva"):
     if pim_file and amz_template:
         try:
-            df_pim = pd.read_excel(pim_file)
-            wb = load_workbook(amz_template)
-            # Buscamos la pestaña 'Template' por posición o nombre
-            ws = wb["Template"] if "Template" in wb.sheetnames else wb.worksheets[1]
+            # Leer PIM
+            df_pim = pd.read_excel(pim_file) if pim_file.name.endswith('.xlsx') else pd.read_csv(pim_file)
             
-            # --- DETECCIÓN DE COLUMNAS (FILA 4) ---
-            # Guardamos la posición de cada columna técnica
+            # Cargar Plantilla Amazon (Formato original)
+            wb = load_workbook(amz_template)
+            # Buscamos la pestaña de datos (Template)
+            sheet_name = "Template" if "Template" in wb.sheetnames else wb.sheetnames[1]
+            ws = wb[sheet_name]
+            
+            # Detectar Columnas en Fila 4 (Nombres técnicos)
             amazon_cols = {str(cell.value).strip(): i+1 for i, cell in enumerate(ws[4]) if cell.value}
             
             if not amazon_cols:
-                st.error("❌ No se detectaron nombres técnicos en la fila 4. Verifica el archivo.")
+                st.error("No se han encontrado etiquetas técnicas en la fila 4 de la plantilla.")
             else:
-                count_mapped = 0
-                # --- ESCRITURA DE DATOS (EMPIEZA FILA 7) ---
+                rows_added = 0
+                # Procesar cada fila del PIM
                 for i, row_pim in df_pim.iterrows():
-                    current_row = i + 7 
+                    target_row = i + 7 # Datos empiezan en fila 7
                     
-                    # 1. Variables PIM
-                    for amz_key, pim_col in MAPEO_VARIABLES.items():
+                    # Rellenar Variables mapeadas
+                    for amz_key, pim_col in current_mapping.items():
                         if amz_key in amazon_cols and pim_col in df_pim.columns:
-                            ws.cell(row=current_row, column=amazon_cols[amz_key]).value = row_pim[pim_col]
-                            if i == 0: count_mapped += 1
+                            ws.cell(row=target_row, column=amazon_cols[amz_key]).value = row_pim[pim_col]
                     
-                    # 2. Valores Fijos
-                    for amz_key, val in VALORES_FIJOS.items():
+                    # Rellenar Valores Fijos
+                    for amz_key, fixed_val in VALORES_FIJOS_DEFAULT.items():
                         if amz_key in amazon_cols:
-                            ws.cell(row=current_row, column=amazon_cols[amz_key]).value = val
+                            ws.cell(row=target_row, column=amazon_cols[amz_key]).value = fixed_val
+                    
+                    rows_added += 1
 
-                st.success(f"✅ Proceso finalizado. Mapeadas {count_mapped} columnas.")
+                # Preparar descarga
+                output = BytesIO()
+                wb.save(output)
                 
-                # --- DESCARGA ---
-                out = BytesIO()
-                wb.save(out)
-                st.download_button("📥 Descargar Archivo", out.getvalue(), "Amazon_Final_Relleno.xlsx")
+                st.success(f"✅ ¡Completado! Se han rellenado {rows_added} filas.")
+                st.download_button(
+                    label="📥 Descargar Plantilla Cumplimentada",
+                    data=output.getvalue(),
+                    file_name="Carga_Masiva_Amazon_Final.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Se produjo un error: {e}")
+    else:
+        st.warning("Por favor, sube ambos archivos para procesar.")
