@@ -4,91 +4,97 @@ from openpyxl import load_workbook
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="Amazon Auto-Mapper", layout="wide")
-st.title("🚀 Amazon Template Automator")
+st.set_page_config(page_title="Amazon Bulk Tool", layout="wide")
 
-# --- CONFIGURACIÓN DE MAPEOS (Se mantiene de tus mensajes previos) ---
+# --- FUNCIONES DE APOYO ---
+def normalize(text):
+    """Limpia etiquetas para que 'vendor_sku#1.value' sea igual a 'vendor_sku'"""
+    if not text: return ""
+    text = str(text).lower().strip()
+    text = re.sub(r'#\d+', '', text) # Quita #1, #2...
+    text = re.sub(r'\.value|\.unit|\.type', '', text) # Quita extensiones técnicas
+    return re.sub(r'[^a-z0-9]', '', text) # Deja solo letras y números
+
+# --- CONFIGURACIÓN POR DEFECTO ---
 VALORES_FIJOS = {
     "brand#1.value": "Cecotec", "external_product_id#1.type": "EAN", 
     "package_level#1.value": "Unit", "manufacturer#1.value": "Cecotec",
-    "country_of_origin#1.value": "Spain", "item_weight#1.unit": "Kilograms"
+    "country_of_origin#1.value": "Spain", "item_weight#1.unit": "Kilograms",
+    "wattage#1.unit": "Watts", "item_package_weight#1.unit": "Kilograms"
 }
 
-MAPEO_INICIAL = {
+MAPEO_VARIABLES = {
     "vendor_sku#1.value": "SKU", "external_product_id#1.value": "EAN",
     "merchant_suggested_asin#1.value": "ASIN", "model_number#1.value": "Nombre Producto / Modelo",
     "bullet_point#1.value": "Bulletpoint 1 (FR)", "bullet_point#2.value": "Bulletpoint 2 (FR)",
-    "rtip_product_description#1.value": "Descripción larga del producto (FR)"
+    "item_type_name#1.value": "Subfamilia (FR)", "color#1.value": "color"
 }
 
 # --- BARRA LATERAL ---
 st.sidebar.header("⚙️ Configuración de Mapeo")
 final_mapping = {}
 with st.sidebar.expander("📝 Editar Correspondencias PIM"):
-    for amz, pim in MAPEO_INICIAL.items():
-        final_mapping[amz] = st.text_input(f"Amazon: {amz}", value=pim)
+    for amz, pim in MAPEO_VARIABLES.items():
+        final_mapping[amz] = st.text_input(f"AMZ: {amz}", value=pim, key=f"sidebar_{amz}")
 
-# --- FUNCIONES ---
-def super_clean(text):
-    if text is None: return ""
-    return re.sub(r'[^a-z0-9]', '', str(text).lower())
-
-# --- CARGA ---
+# --- INTERFAZ PRINCIPAL ---
+st.title("📦 Amazon Template Automator")
 col1, col2 = st.columns(2)
 with col1:
     pim_file = st.file_uploader("📂 1. Subir Datos PIM", type=["xlsx", "csv"])
 with col2:
     amz_template = st.file_uploader("📂 2. Subir Plantilla Amazon", type=["xlsx"])
 
-if st.button("🚀 Ejecutar Proceso"):
+if st.button("🚀 Procesar Plantilla"):
     if pim_file and amz_template:
         try:
+            # 1. Cargar datos
             df_pim = pd.read_excel(pim_file) if pim_file.name.endswith('.xlsx') else pd.read_csv(pim_file)
             wb = load_workbook(amz_template)
-            sheet_name = "Template" if "Template" in wb.sheetnames else wb.sheetnames[1]
-            ws = wb[sheet_name]
-            
-            # --- MOTOR DE AUTODETECCIÓN DE FILA TÉCNICA ---
-            detected_cols = {}
-            found_row = None
-            
-            # Buscamos en las filas 3, 4 y 5 la que contenga "sku" o "product"
-            for row_num in [3, 4, 5]:
-                temp_cols = {super_clean(ws.cell(row=row_num, column=c).value): c 
-                             for c in range(1, ws.max_column + 1) if ws.cell(row=row_num, column=c).value}
-                if any("sku" in k or "productid" in k for k in temp_cols.keys()):
-                    detected_cols = temp_cols
-                    found_row = row_num
-                    break
-            
-            if not found_row:
-                st.error("❌ No se pudo detectar la fila técnica de Amazon (Fila 3, 4 o 5).")
-            else:
-                st.info(f"🔍 Detectados nombres técnicos en la **Fila {found_row}**.")
-                
-                # --- ESCRITURA ---
-                rows_filled = 0
-                for i, row_pim in df_pim.iterrows():
-                    target_row = i + 7 # Amazon siempre empieza datos en 7
-                    
-                    # 1. Variables (Barra Lateral)
-                    for amz_key, pim_col in final_mapping.items():
-                        clean_key = super_clean(amz_key)
-                        if clean_key in detected_cols and pim_col in df_pim.columns:
-                            ws.cell(row=target_row, column=detected_cols[clean_key]).value = row_pim[pim_col]
-                    
-                    # 2. Valores Fijos
-                    for amz_key, val in VALORES_FIJOS.items():
-                        clean_key = super_clean(amz_key)
-                        if clean_key in detected_cols:
-                            ws.cell(row=target_row, column=detected_cols[clean_key]).value = val
-                    rows_filled += 1
+            # Buscamos la pestaña 'Template'
+            ws = wb["Template"] if "Template" in wb.sheetnames else wb.worksheets[1]
 
-                # --- DESCARGA ---
+            # 2. Mapear Fila 4 (Amazon) de forma flexible
+            # Guardamos { 'nombre_normalizado': indice_columna }
+            amazon_cols = {}
+            for c in range(1, ws.max_column + 1):
+                val = ws.cell(row=4, column=c).value
+                if val:
+                    amazon_cols[normalize(val)] = c
+
+            if not amazon_cols:
+                st.error("No se detectaron cabeceras en la Fila 4. Intenta con la Fila 3 o revisa el archivo.")
+            else:
+                # 3. Escritura de Datos
+                rows_processed = 0
+                log_confirmacion = []
+
+                for i, row_pim in df_pim.iterrows():
+                    target_row = i + 7 # Estándar de Amazon: Datos empiezan en 7
+                    
+                    # Rellenar Variables (Barra Lateral)
+                    for amz_tag, pim_col in final_mapping.items():
+                        clean_tag = normalize(amz_tag)
+                        if clean_tag in amazon_cols and pim_col in df_pim.columns:
+                            ws.cell(row=target_row, column=amazon_cols[clean_tag]).value = row_pim[pim_col]
+                            if i == 0: log_confirmacion.append(f"Mapeado: {amz_tag} -> Col {amazon_cols[clean_tag]}")
+
+                    # Rellenar Fijos
+                    for amz_tag, val_fijo in VALORES_FIJOS.items():
+                        clean_tag = normalize(amz_tag)
+                        if clean_tag in amazon_cols:
+                            ws.cell(row=target_row, column=amazon_cols[clean_tag]).value = val_fijo
+
+                    rows_processed += 1
+
+                # 4. Finalizar
+                st.success(f"✅ ¡Hecho! Se han rellenado {rows_processed} filas.")
+                with st.expander("Ver detalles del mapeo técnico"):
+                    st.write(log_confirmacion)
+
                 output = BytesIO()
                 wb.save(output)
-                st.success(f"✅ Se han rellenado {rows_filled} filas correctamente.")
-                st.download_button("📥 Descargar Plantilla Rellena", output.getvalue(), "Amazon_Final_Relleno.xlsx")
+                st.download_button("📥 Descargar Resultado", output.getvalue(), "Amazon_Final_Relleno.xlsx")
 
         except Exception as e:
             st.error(f"Error técnico: {e}")
