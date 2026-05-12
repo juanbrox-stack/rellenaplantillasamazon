@@ -2,66 +2,61 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-# Configuración de la página
-st.set_page_config(page_title="Amazon Template Filler", layout="wide")
+st.set_page_config(page_title="Amazon Filler Pro", layout="wide")
 
-st.title("📦 Automatización de Plantillas Amazon")
-st.markdown("""
-Esta herramienta cruza los datos de tu **PIM** con la **Plantilla de Amazon** usando las reglas de mapeo y valores fijos proporcionadas.
-""")
+st.title("📦 Amazon Template Automator")
 
-# --- SECCIÓN DE CARGA DE ARCHIVOS ---
-st.sidebar.header("1. Configuración")
-config_file = st.sidebar.file_uploader("Subir Amazon-PIM.xlsx (Mapeo y Fijos)", type=["xlsx"])
+# --- CARGA DE ARCHIVOS ---
+with st.sidebar:
+    st.header("1. Configuración de Mapeo")
+    config_file = st.file_uploader("Subir Amazon-PIM.xlsx", type=["xlsx"])
 
 col1, col2 = st.columns(2)
 with col1:
-    st.header("2. Datos Origen")
-    pim_file = st.file_uploader("Subir Fichero PIM", type=["xlsx", "csv"])
+    st.header("2. Fichero PIM")
+    pim_file = st.file_uploader("Subir FRIGOS.xlsx", type=["xlsx", "csv"])
 
 with col2:
-    st.header("3. Destino")
-    amazon_template = st.file_uploader("Subir Plantilla Amazon Vacía", type=["xlsx"])
+    st.header("3. Plantilla Amazon")
+    amazon_template = st.file_uploader("Subir Plantilla Amazon (Refrigerators...)", type=["xlsx"])
 
-# --- LÓGICA DE PROCESAMIENTO ---
-if st.button("Generar Plantilla Cumplimentada"):
+if st.button("🚀 Iniciar Carga Masiva"):
     if not (config_file and pim_file and amazon_template):
-        st.warning("Por favor, asegúrate de subir todos los archivos requeridos.")
+        st.error("Faltan archivos por subir.")
     else:
         try:
-            # A. Leer reglas de mapeo (Hojas del archivo de configuración)
-            # Usamos los nombres de hoja que indicaste
-            df_map = pd.read_excel(config_file, sheet_name=0)   # Hoja 1: AMAZON, PIM
-            df_fixed = pd.read_excel(config_file, sheet_name=1) # Hoja 2: AUTOCOMPLETAR, Valor
+            # 1. LEER CONFIGURACIÓN (Mapeo y Fijos)
+            # Aseguramos nombres de columnas limpios
+            df_map = pd.read_excel(config_file, sheet_name=0)
+            df_fixed = pd.read_excel(config_file, sheet_name=1)
 
-            # B. Leer datos del PIM
-            if pim_file.name.endswith('.csv'):
-                df_pim = pd.read_csv(pim_file)
-            else:
-                df_pim = pd.read_excel(pim_file)
+            # 2. LEER PIM (FRIGOS)
+            df_pim = pd.read_excel(pim_file) if pim_file.name.endswith('.xlsx') else pd.read_csv(pim_file)
 
-            # C. Leer Plantilla de Amazon conservando las 3 filas de cabecera
-            # Leemos las 3 primeras filas para el encabezado final
-            headers = pd.read_excel(amazon_template, header=None, nrows=3)
-            # Leemos la estructura de columnas (fila 3 es el nombre técnico)
-            df_structure = pd.read_excel(amazon_template, header=2)
+            # 3. LEER PLANTILLA AMAZON (Pestaña 2: 'Template')
+            # Amazon usa la pestaña 2 para los datos. Habitualmente se llama 'Template'
+            xl = pd.ExcelFile(amazon_template)
+            nombre_pestana_destino = xl.sheet_names[1] # Forzamos la segunda pestaña
             
-            # Crear DataFrame vacío con las columnas exactas de Amazon
-            df_final = pd.DataFrame(columns=df_structure.columns)
+            # Guardamos las 3 filas de encabezado técnico
+            headers = pd.read_excel(amazon_template, sheet_name=nombre_pestana_destino, header=None, nrows=3)
+            # Obtenemos los nombres de las columnas técnicas (fila 3, índice 2)
+            amazon_cols = headers.iloc[2].tolist()
 
-            # --- PROCESAMIENTO DE DATOS ---
+            # 4. CREAR DATAFRAME DE TRABAJO
             num_rows = len(df_pim)
-            
-            # 1. Aplicar Valores Fijos (Hoja 2)
-            # La Hoja 2 tiene la columna 'AUTOCOMPLETAR' con el nombre del campo técnico
-            for _, row in df_fixed.iterrows():
-                campo_tecnico = str(row[0]).strip()
-                valor_fijo = row[1]
-                if campo_tecnico in df_final.columns:
-                    df_final[campo_tecnico] = [valor_fijo] * num_rows
+            # Creamos un DF vacío con las columnas exactas de Amazon
+            df_final = pd.DataFrame(columns=amazon_cols)
 
-            # 2. Aplicar Mapeo Dinámico (Hoja 1)
-            # La Hoja 1 tiene 'AMAZON' (destino) y 'PIM' (origen)
+            # 5. PROCESAR VALORES FIJOS (Hoja 2)
+            # Usamos iloc para evitar errores si los nombres de columna en el mapeo fallan
+            for _, row in df_fixed.iterrows():
+                campo_amazon = str(row.iloc[0]).strip()
+                valor_fijo = row.iloc[1]
+                if campo_amazon in df_final.columns:
+                    df_final[campo_amazon] = [valor_fijo] * num_rows
+
+            # 6. PROCESAR MAPEO (Hoja 1)
             for _, row in df_map.iterrows():
                 col_amazon = str(row['AMAZON']).strip()
                 col_pim = str(row['PIM']).strip()
@@ -69,25 +64,26 @@ if st.button("Generar Plantilla Cumplimentada"):
                 if col_amazon in df_final.columns and col_pim in df_pim.columns:
                     df_final[col_amazon] = df_pim[col_pim].values
 
-            # --- RECONSTRUCCIÓN DEL EXCEL ---
-            # Combinamos los encabezados originales con los nuevos datos
-            # Convertimos headers a DataFrame con las mismas columnas para que encajen
-            headers.columns = df_final.columns
-            result_df = pd.concat([headers, df_final], ignore_index=True)
+            # 7. RECONSTRUCCIÓN FINAL
+            # Convertimos los encabezados a DF para unirlos
+            df_headers = pd.DataFrame(headers.values, columns=amazon_cols)
+            # Concatenamos: Encabezados + Datos nuevos
+            df_completo = pd.concat([df_headers, df_final], ignore_index=True)
 
-            # Exportar a memoria
+            # 8. GENERAR EXCEL
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # Escribimos sin encabezado de Pandas porque ya están en el DataFrame
-                result_df.to_excel(writer, index=False, header=False, sheet_name='Template')
+                # Escribimos en la pestaña 'Template'
+                df_completo.to_excel(writer, index=False, header=False, sheet_name=nombre_pestana_destino)
             
-            st.success(f"✅ ¡Éxito! Se han procesado {num_rows} productos.")
+            st.success(f"✅ ¡Hecho! {num_rows} productos procesados.")
             st.download_button(
-                label="📥 Descargar Plantilla Lista",
+                label="⬇️ Descargar Fichero Final",
                 data=output.getvalue(),
-                file_name="Amazon_Bulk_Load_READY.xlsx",
+                file_name="Amazon_Carga_Final.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
-            st.error(f"Se ha producido un error durante el procesamiento: {e}")
+            st.error(f"Error detallado: {e}")
+            st.info("Asegúrate de que en el archivo de mapeo las columnas se llamen 'AMAZON' y 'PIM'.")
